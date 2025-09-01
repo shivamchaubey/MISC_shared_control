@@ -1,0 +1,4 @@
+[submodule "lib/CIS_matlab_code/cis2m"]
+	path = lib/CIS_matlab_code/cis2m
+	url = git@github.com:tzanis-anevlavis/cis2m.git
+	branch = master
