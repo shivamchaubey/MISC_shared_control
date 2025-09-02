@@ -44,7 +44,7 @@ class config:
         self.ros_setup_path = self.ros_path + "/devel/setup.bash"
         self.matlab_cis_path = self.lib_path + "/CIS_matlab_code/cis2m/matlab/"
         # self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_rho_tri" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
-        self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_maze_env_biased_model" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
+        self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_maze_env_biased_model1" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
         print("save_cis_path", self.save_cis_path)
         ############################################################################################
 
@@ -89,10 +89,10 @@ class config:
        [ 0.,  0.,  0.,  0., -0., -0., -0., -1.]])
         
         ## to do ## need to fix the variable name
-        self.Fw = np.array([0.00196198, 0.00045803, 0.01529115, 0.00403234, 0.00161874,
-       0.00047666, 0.01903076, 0.00709871, 0.00024498, 0.00012442,
-       0.00017982, 0.00011197, 0.00024498, 0.00012442, 0.00017982,
-       0.00011197])
+        self.Fw = np.array([0.003, 0.003, 0.010, 0.010, 0.003,
+       0.003, 0.010, 0.010, 0.0005, 0.0005,
+       0.00003, 0.00003, 0.0005, 0.0005, 0.00003,
+       0.00003])
         # provide environment
 
         # franka environment
@@ -141,7 +141,7 @@ class config:
         ## construct Control invariant sets required
 
         cis_exists = os.path.isfile(self.save_cis_path)
-        # cis_exists = False
+        cis_exists = False
         if cis_exists:
                 print("[CIS cache] Loading saved CIS from:", self.save_cis_path)
                 saved_CIS = load_cis_npz(self.save_cis_path)
