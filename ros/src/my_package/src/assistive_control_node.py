@@ -8,7 +8,7 @@ import numpy as np
 import sys, os
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent.parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(1, str(project_root) +'/')
 
 import config as cfg

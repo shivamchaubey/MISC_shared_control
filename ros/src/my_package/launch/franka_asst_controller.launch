@@ -2,7 +2,7 @@
     <node name="JoystickNode" pkg="my_package" type="spacemouse_input_node.py" output="screen" />
     <!-- <node name="SystemSimulationNode" pkg="my_package" type="simulation_node.py" output="screen" />  -->
     <node name="VisulaizationNode" pkg="my_package" type="visualization_node.py" output="screen" /> 
-    <node name="FrankaNode" pkg="my_package" type="franka_controller_node.py" output="screen" />
+    <!-- <node name="FrankaNode" pkg="my_package" type="franka_controller_node.py" output="screen" /> -->
     
     <arg name="Assistance_Active" default="1"/>
     <arg name="Training_Active" default="0"/>

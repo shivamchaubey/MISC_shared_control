@@ -9,7 +9,8 @@ from franky import Robot, Affine, CartesianMotion, CartesianVelocityMotion, \
 
 import sys, os
 from pathlib import Path
-project_root = Path(__file__).resolve().parent.parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+print ("project_root", project_root)
 sys.path.insert(0, str(project_root) +'/')
 
 import config as cfg
@@ -25,7 +26,7 @@ class SystemSimulationNode:
         self.robot_ip     = rospy.get_param("~robot_ip", "172.16.0.2")
         self.rel_dyn      = float(rospy.get_param("~relative_dynamics_factor", 0.006))
         self.frame_id     = rospy.get_param("~frame_id", "panda_link0")
-        self.motion_type = rospy.get_param("~motion_type", "position").lower()  
+        self.motion_type = rospy.get_param("~motion_type", "velocity").lower()  
         
         # --- robot ---
         rospy.loginfo("Connecting to Franka at %s ...", self.robot_ip)
@@ -58,8 +59,8 @@ class SystemSimulationNode:
 
 
         ### intialize franka at particular location i.e. inside the region where we want to stay safe:
-        self.robot.move(CartesianMotion(Affine([float(self.x0_pose[0]), float(self.x0_pose[1]), self.z0_pos], self.q0),
-                                            ReferenceType.Absolute), asynchronous=True)
+        # self.robot.move(CartesianMotion(Affine([float(self.x0_pose[0]), float(self.x0_pose[1]), self.z0_pos], self.q0),
+        #                                     ReferenceType.Absolute), asynchronous=True)
         
         ##############################################################################################
 
@@ -128,10 +129,10 @@ class SystemSimulationNode:
         print ("ee_pose", ee_pose)
 
         # update the state, this will have the error term as the next state from the model and franka would match
-        # next_state[0] = float(ee_pose.translation[0])
-        # next_state[1] = float(ee_pose.translation[1])
-        # next_state[2] = float(ee_tw.linear[0])
-        # next_state[3] = float(ee_tw.linear[1])
+        next_state[0] = float(ee_pose.translation[0])
+        next_state[1] = float(ee_pose.translation[1])
+        next_state[2] = float(ee_tw.linear[0])
+        next_state[3] = float(ee_tw.linear[1])
         print ("model state: ", next_state)
         print ("robot state: ", float(ee_pose.translation[0]), float(ee_pose.translation[1]), float(ee_tw.linear[0]), float(ee_tw.linear[1]))
 

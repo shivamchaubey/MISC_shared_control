@@ -37,7 +37,7 @@ import time
 import sys, os
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent.parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
 print (project_root)
 sys.path.insert(0, str(project_root) +'/')
 import config as cfg
