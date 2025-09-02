@@ -284,7 +284,7 @@ if __name__ == "__main__":
     obs_fx = cfg.obs_fx.copy()
     obs_fx.append(fx)
 
-    plotter = Plotter(obs_Fx, obs_fx, axes=(0,1), title="Simulation Plot")
+    plotter = Plotter(cfg)
 
     # C_list = saved_CIS["C_list"]
     # c_list = saved_CIS["c_list"]
