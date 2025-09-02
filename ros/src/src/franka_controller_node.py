@@ -17,6 +17,7 @@ cfg = cfg.config()
 sys.path.insert(1, cfg.lib_path)
 
 
+
 class SystemSimulationNode:
     def __init__(self):
         # Initialize the ROS node
@@ -36,6 +37,9 @@ class SystemSimulationNode:
         except Exception as e: rospy.logwarn("recover_from_errors(): %s", e)
         self.robot.relative_dynamics_factor = self.rel_dyn
 
+
+
+
         cs = self.robot.current_cartesian_state
         ee_pose = cs.pose.end_effector_pose
 
@@ -45,11 +49,19 @@ class SystemSimulationNode:
         self.prev_x = np.array([ee_pose.translation[0], ee_pose.translation[1], 0, 0])
 
         print ("self.xy0 ", self.xy0 )
-        self.z_pos = 0
+        self.x0_pose = cfg.spawn_x0
+        self.z0_pos = 0.27
         self.z0  = float(ee_pose.translation[2])
         self.q0  = [ee_pose.quaternion[0], ee_pose.quaternion[1],
                     ee_pose.quaternion[2], ee_pose.quaternion[3]]
         
+
+
+        ### intialize franka at particular location i.e. inside the region where we want to stay safe:
+        self.robot.move(CartesianMotion(Affine([float(self.x0_pose[0]), float(self.x0_pose[1]), self.z0_pos], self.q0),
+                                            ReferenceType.Absolute), asynchronous=True)
+        
+        ##############################################################################################
 
         # Initialize publisher for the state
         self.state_pub = rospy.Publisher('/state', Float64MultiArray, queue_size=1)
@@ -82,9 +94,6 @@ class SystemSimulationNode:
         # self.sys = SystemDynamics(dt = 1/cfg.simulation_frequency, damping_factor = cfg.damping_factor)
         self.A = cfg.A
         self.B = cfg.B
-        self.E = cfg.E
-        self.Gw = cfg.Gw
-        self.gw = cfg.gw
 
     def control_callback(self, msg):
         """Callback function to handle control input updates."""
@@ -95,11 +104,6 @@ class SystemSimulationNode:
     def publish_state_and_control(self):
         """Publish the current state and altered control input."""
         # Create a message for the state [x, y, vx, vy]
-        self.restart_sim = rospy.get_param('/restart_sim', False)
-        self.restart_init_x = rospy.get_param('/init_x', [0, 0, 0, 0])
-
-        if bool(self.restart_sim) == True:
-            self.curr_x = self.restart_init_x 
 
         curr_x = self.curr_x
         u = self.u
@@ -117,16 +121,13 @@ class SystemSimulationNode:
                                             ReferenceType.Absolute),
                             asynchronous=True)
 
-        # tmc = TwistStamped(); tmc.header = pm.header
-        # tmc.twist.linear.x, tmc.twist.linear.y, tmc.twist.linear.z = vx, vy, 0.0
-        # self.pub_cmd_twist.publish(tmc)
-
         now = rospy.Time.now()
         cs = self.robot.current_cartesian_state
         ee_pose = cs.pose.end_effector_pose
         ee_tw   = cs.velocity.end_effector_twist
         print ("ee_pose", ee_pose)
 
+        # update the state, this will have the error term as the next state from the model and franka would match
         # next_state[0] = float(ee_pose.translation[0])
         # next_state[1] = float(ee_pose.translation[1])
         # next_state[2] = float(ee_tw.linear[0])

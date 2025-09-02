@@ -27,7 +27,7 @@ class SystemSimulationNode:
         self.A = cfg.A
         self.B = cfg.B
 
-        self.curr_x = np.array([0.695, 0.160, 0.0, 0.0])
+        self.curr_x = cfg.spawn_x0
 
         # Initialize state and control input variables
         self.init_x = self.curr_x.copy()
