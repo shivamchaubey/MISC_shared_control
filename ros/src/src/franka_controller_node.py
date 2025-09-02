@@ -14,9 +14,8 @@ sys.path.insert(0, str(project_root) +'/')
 
 import config as cfg
 cfg = cfg.config()
-sys.path.insert(1, cfg.python_lib_path)
+sys.path.insert(1, cfg.lib_path)
 
-from system_dynamics import SystemDynamics
 
 class SystemSimulationNode:
     def __init__(self):
@@ -81,7 +80,11 @@ class SystemSimulationNode:
         self.rate = rospy.Rate(cfg.simulation_frequency)  # 10 Hz (0.1 seconds)
         # self.rate = rospy.Rate(100)  # 10 Hz (0.1 seconds)
         # self.sys = SystemDynamics(dt = 1/cfg.simulation_frequency, damping_factor = cfg.damping_factor)
-        self.sys = SystemDynamics(dt = cfg.sys_dt, damping_factor = cfg.damping_factor)
+        self.A = cfg.A
+        self.B = cfg.B
+        self.E = cfg.E
+        self.Gw = cfg.Gw
+        self.gw = cfg.gw
 
     def control_callback(self, msg):
         """Callback function to handle control input updates."""
@@ -102,7 +105,7 @@ class SystemSimulationNode:
         u = self.u
         
         # Simulate the system's next state using the current state and control input
-        next_state = self.sys.next(curr_x, u)
+        next_state = self.A@curr_x + self.B@u
         vx, vy = float(next_state[2]), float(next_state[3])
         
         if self.motion_type == "velocity":            
