@@ -1,6 +1,0 @@
-<launch>
-    <node name="JoystickNode" pkg="assistive_controller" type="spacemouse_input_node.py" output="screen" />
-    <node name="SystemSimulationNode" pkg="assistive_controller" type="simulation_node.py" output="screen" /> 
-    <node name="VisulaizationNode" pkg="assistive_controller" type="visualization_node.py" output="screen" /> 
-    <node pkg="assistive_controller" type="assistive_control_node.py" name="AssistiveControlNode1" output="screen"/> 
-</launch>
