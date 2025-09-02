@@ -1,0 +1,15 @@
+*.bag
+*.npy
+*.pdf
+*.odt
+*.csv
+*.zip
+*dist
+*devel
+*include
+*build
+!lib/extra/map/*.npy
+*.catkin_tool
+*.pyc
+lib/__pycache__/*
+__pycache__
