@@ -104,8 +104,7 @@ class Plotter():
         robot = patches.Circle((0.2, 0.2),
                                     radius=self._disk_radius,
                                     facecolor='blue', edgecolor='blue',
-                                    alpha=1, lw=1.5,
-                                    animated=True, zorder=3)
+                                    alpha=1, lw=1.5, zorder=3)
         ax.add_patch(robot)
 
 
@@ -195,6 +194,7 @@ class Plotter():
         # plt.show()
 
         if rotate_pose_180:
+            ## used to bring franka coordinate system to plot
             # flip both axes -> visual 180° rotation
             xlo, xhi = ax_pose.get_xlim()
             ylo, yhi = ax_pose.get_ylim()
@@ -211,6 +211,6 @@ class Plotter():
 if __name__ == "__main__":
     import config
     cfg = config.config()
-    plotter_ = plotter(cfg)
+    plotter_ = Plotter(cfg)
     fig, plt, ax_pose, ax_velocity, ax_control, traj, pose, button_ax, robot, vel_x, vel_y, ax_ass, ay_ass, ax_user, ay_user = plotter_.plot_combined()
     plt.show()
