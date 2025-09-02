@@ -5,7 +5,6 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root) +'/lib')
 from constraint_builder import ConstraintHelper
-from CIS_computation import ExtractCIS
 from helper import load_cis_npz, assert_has_any_entries
 
 class config:
@@ -43,8 +42,8 @@ class config:
         self.ros_path = self.root_path + 'ros'
         self.ros_setup_path = self.ros_path + "/devel/setup.bash"
         self.matlab_cis_path = self.lib_path + "/CIS_matlab_code/cis2m/matlab/"
-        self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_rho_tri" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
-        self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
+        # self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_rho_tri" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
+        self.save_cis_path = self.lib_path + "/CIS_data/real_exp_franka_maze_env" + f"{float(self.sys_dt):.6f}".rstrip('0').rstrip('.') + ".npz"
         print("save_cis_path", self.save_cis_path)
         ############################################################################################
 
@@ -68,29 +67,38 @@ class config:
      
 
         # provide environment
-        self.agent_size = 0.019 # diameter
-        scale = 0.001 #mm to m
-        self.Workspace = scale*np.array([[178, 47], [704, 47], [704, 817], [178, 817]], dtype=float)
-        Obs1 = scale*np.array([[568, 429], [703, 429], [703, 816], [568, 816]], dtype=float)
-        Obs2 = scale*np.array([[308, 181], [438, 181], [438, 691], [308, 691]], dtype=float)
-        Obs3 = scale*np.array([[437,  47], [568,  47], [568, 309], [437, 309]], dtype=float)
-        Obs4_rhombus = scale * np.array([
-        [640, 235],   # top
-        [615, 200],   # left
-        [640, 165],   # bottom
-        [665, 200],   # right
-        ], dtype=float)
 
-        # Small triangle in the free top-left area
-        # base ~ y=740, apex ~ y=770
-        Obs5_triangle = scale * np.array([
-        [230, 740],   # left base
-        [260, 740],   # right base
-        [245, 770],   # apex
-        ], dtype=float)
+        # franka environment
+        self.spawn_x0 = np.array([0.676, 0.141, 0.00, 0.0])
+        self.agent_size = 0.019/2 # mm radius
+        ws_ori = [0.695, 0.160] # x-y , z is set manually, we are only interested in 2-D case
+        block_size = 0.032 # mm
+        self.Workspace = np.array([[ws_ori[0], ws_ori[1]], [ws_ori[0], ws_ori[1] - 6*block_size], [ws_ori[0] - 4*block_size, ws_ori[1] - 6*block_size], [ws_ori[0] - 4* block_size, ws_ori[1]]], dtype=float)
+        Obs1 = np.array([[ws_ori[0] - block_size, ws_ori[1]], [ws_ori[0] - block_size, ws_ori[1] - 2*block_size], [ws_ori[0] - 2*block_size, ws_ori[1] - 2*block_size], [ws_ori[0] - 2* block_size, ws_ori[1]]], dtype=float)
+        Obs2 = np.array([[ws_ori[0], ws_ori[1] - 3*block_size], [ws_ori[0], ws_ori[1] - 6*block_size], [ws_ori[0] - block_size, ws_ori[1] - 6*block_size], [ws_ori[0] - block_size, ws_ori[1] - 3*block_size]], dtype=float)
+        Obs3 = np.array([[ws_ori[0] - 2*block_size, ws_ori[1] - block_size], [ws_ori[0] - 2*block_size, ws_ori[1] - 5*block_size], [ws_ori[0] - 3*block_size, ws_ori[1] - 5*block_size], [ws_ori[0] - 3* block_size, ws_ori[1] - block_size]], dtype=float)
+        self.Obs = [Obs1, Obs2, Obs3]
 
 
-        self.Obs = [Obs1, Obs2, Obs3, Obs4_rhombus, Obs5_triangle]
+        ## testing environment with rhombus and triangle
+        # scale = 0.001 ## mm to m
+        # Obs4_rhombus = scale * np.array([
+        # [640, 235],   # top
+        # [615, 200],   # left
+        # [640, 165],   # bottom
+        # [665, 200],   # right
+        # ], dtype=float)
+
+        # # Small triangle in the free top-left area
+        # # base ~ y=740, apex ~ y=770
+        # Obs5_triangle = scale * np.array([
+        # [230, 740],   # left base
+        # [260, 740],   # right base
+        # [245, 770],   # apex
+        # ], dtype=float)
+        # self.Obs = [Obs1, Obs2, Obs3, Obs4_rhombus, Obs5_triangle]
+
+
         self.vel_vertices   = np.array([[0.05, 0.05], [0.05, -0.05], [-0.05, -0.05], [-0.05, 0.05]], dtype=float) #m/s
         self.accel_vertices = np.array([[1.0, 1.0], [1.0, -1.0], [-1.0, -1.0], [-1.0, 1.0]], dtype=float)         #m/s^2
 
@@ -106,6 +114,7 @@ class config:
         ## construct Control invariant sets required
 
         cis_exists = os.path.isfile(self.save_cis_path)
+        # cis_exists = False
         if cis_exists:
                 print("[CIS cache] Loading saved CIS from:", self.save_cis_path)
                 saved_CIS = load_cis_npz(self.save_cis_path)
@@ -114,6 +123,7 @@ class config:
                 self.Cx_dis_list = saved_CIS["Cx_dis_list"]
                 self.cx_dis_list = saved_CIS["cx_dis_list"]
         else:
+                from CIS_computation import ExtractCIS
                 print("[CIS cache] No matching file found; Computing CIS.")
                 cis_builder = ExtractCIS(self)
                 cis_builder.compute_cis()
@@ -124,7 +134,6 @@ class config:
                 self.cx_dis_list = cis_builder.cx_dis_list; 
         ## check if CIS if healthy
         assert_has_any_entries(self.Cx_dis_list)
-        print("testing")
         ################# STATE CONVEX CONSTRAINTS ######################
 
         ################# CONTROL CONVEX CONSTRAINTS ####################
