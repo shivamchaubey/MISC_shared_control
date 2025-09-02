@@ -5,7 +5,6 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root) +'/lib')
 from constraint_builder import ConstraintHelper
-from CIS_computation import ExtractCIS
 from helper import load_cis_npz
 
 class config:
@@ -90,6 +89,7 @@ class config:
                 self.Cx_dis_list = saved_CIS["Cx_dis_list"]
                 self.cx_dis_list = saved_CIS["cx_dis_list"]
         else:
+                from CIS_computation import ExtractCIS
                 print("[CIS cache] No matching file found; Computing CIS.")
                 cis_builder = ExtractCIS(self)
                 cis_builder.compute_cis()
