@@ -12,24 +12,30 @@ import time
 
 class ExtractCIS:
     '''Class to extract the Control Invariant Set (CIS) from the given system dynamics'''
-    def __init__(self, cfg, Fx_list = None, fx_list = None,
-                 Gu = None, gu = None, E = None, Gw = None, 
-                 Fw = None, use_matlab = False, safe_set_path = None):
-        
+    def __init__(self, cfg):
+        # Needed for paths
+        self.cfg = cfg
+
         # Define the system dynamics
         self.A = cfg.A
         self.B = cfg.B
 
         # Define state and input constraints
-        self.Fx_list = Fx_list
-        self.fx_list = fx_list
-        self.Gu = Gu
-        self.gu = gu
+        # Nonconvex state safe set supported by halfspaces
+        self.Fx_hs_list = cfg.Fx_hs_list  # decompose halfspaces for non-convex safe sets
+        self.fx_hs_list = cfg.fx_hs_list  # decompose halfspaces for non-convex safe sets
+        
+        # convex state safe set
+        self.Fx = cfg.Fx if isinstance(cfg.Fx, np.ndarray) else None
+        self.fx = cfg.fx if isinstance(cfg.fx, np.ndarray) else None
+
+        self.Gu = cfg.Gu if isinstance(cfg.Gu, np.ndarray) else None
+        self.gu = cfg.gu if isinstance(cfg.gu, np.ndarray) else None
 
         # Define disturbance constraints
-        self.E = E
-        self.Gw = Gw
-        self.Fw = Fw
+        self.E = cfg.E
+        self.Gw = cfg.Gw
+        self.Fw = cfg.Fw
 
         self.cis_method = False # for MPT3 matlab function 
         self.L = 2
@@ -37,8 +43,6 @@ class ExtractCIS:
 
         self.initialize_inequality()
 
-        self.safe_set_path = safe_set_path
-        self.use_matlab = use_matlab
         self.matlab_cis_path = cfg.matlab_cis_path
         self.python_to_matlab_function_path = cfg.lib_path
         # self.kill_matlab()
@@ -54,162 +58,133 @@ class ExtractCIS:
                 python_data[i] = np.array(data[i])
             return python_data
         
+    @staticmethod
+    def _to_ml_mat(X):
+        X = np.asarray(X, dtype=float)
+        return matlab.double(X.tolist())
+
+    @staticmethod
+    def _to_ml_col(x):
+        x = np.asarray(x, dtype=float).reshape(-1, 1)
+        return matlab.double(x.tolist())
+
+    @staticmethod
+    def _cell_to_py(cell):
+        # MATLAB cell array (of matrices/vectors) -> list of np.ndarrays
+        return [np.array(c, dtype=float) for c in cell]
+
     def initialize_inequality(self):
+        # constant matrices to MATLAB types (ensure column vectors for *_w, *_u)
+        self.A_matlab  = self._to_ml_mat(self.A)
+        self.B_matlab  = self._to_ml_mat(self.B)
 
-        # Precompute constant matrices (no need to convert them in each loop)
-        self.A_matlab = matlab.double(self.A.tolist())
-        self.B_matlab = matlab.double(self.B.tolist())
-        self.Gu_matlab = matlab.double(self.Gu.tolist()) if self.Gu is not None else matlab.double([])
-        self.gu_matlab = matlab.double(self.gu.tolist()) if self.gu is not None else matlab.double([])
+        self.Gu_matlab = self._to_ml_mat(self.Gu) if self.Gu is not None else matlab.double([])
+        self.gu_matlab = self._to_ml_col(self.gu) if self.gu is not None else matlab.double([])
 
-
-        self.E_matlab = matlab.double(self.E.tolist()) if self.E is not None else matlab.double([])
-        self.Gw_matlab = matlab.double(self.Gw.tolist()) if self.Gw is not None else matlab.double([])
-        self.Fw_matlab = matlab.double(self.Fw.tolist()) if self.Fw is not None else matlab.double([])
+        self.E_matlab  = self._to_ml_mat(self.E)  if self.E  is not None else matlab.double([])
+        self.Gw_matlab = self._to_ml_mat(self.Gw) if self.Gw is not None else matlab.double([])
+        self.Fw_matlab = self._to_ml_col(self.Fw) if self.Fw is not None else matlab.double([])
 
     def compute_cis(self):
         self.cis_data = []
-        solution_list = []
 
-        # Start up MATLAB engines
-        num_engines = min(10, len(self.Fx_list) * 4)  # Ensure at most 10 engines, or enough for tasks
-        print ("<<<<<<<<<< matlab engine initialization >>>>>>>>>: ")
-        t0 = time.perf_counter()
-        ## CIS settings:
-        L = self.L
-        T = self.T
-        implicit = False
-        implicit_matlab = matlab.logical(implicit)
-        cis_method = matlab.logical(self.cis_method)
+        # Start MATLAB engines
+        num_jobs = sum(len(block) for block in self.Fx_hs_list)
+        num_engines = max(1, min(10, max(1, len(self.Fx_hs_list) * 4), num_jobs))
+        print("<<<<<<<<<< matlab engine initialization >>>>>>>>>")
+        # t0 = time.perf_counter()
+        engines = [self.start_matlab_engine(self.cfg.lib_path)
+                for _ in range(num_engines)]
+        # print("time taken for matlab engine initialization:", time.perf_counter() - t0)
 
-        print ("Computing CIS for INNER BOX")
-        
-        engines = [self.start_matlab_engine(self.matlab_cis_path, self.python_to_matlab_function_path) for _ in range(num_engines)]
-        print ("time taken for matlab engine initialization: ", time.perf_counter() - t0)
-        # Distribute tasks across MATLAB engines in round-robin
-        engine_idx = 0
-        for Fx_, fx_ in zip(self.Fx_list, self.fx_list):
-            solutions = []
-            for (Fx, fx) in zip(Fx_, fx_):
-                if Fx.shape[1] != self.A.shape[0]:
-                    raise ValueError(f"Dimension mismatch: Fx has {Fx.shape[1]} columns but A has {self.A.shape[0]} rows.")
+        # Constants (already prepared in initialize_inequality)
+        A_ml, B_ml = self.A_matlab, self.B_matlab
+        Gu_ml, gu_ml = self.Gu_matlab, self.gu_matlab
+        E_ml, Gw_ml, Fw_ml = self.E_matlab, self.Gw_matlab, self.Fw_matlab
+        implicit_ml = matlab.logical(bool(self.cis_method))
+        L = float(self.L) if self.L is not None else 0.0
+        has_T = self.T is not None
+        T = float(self.T) if has_T else 0.0
+
+        ### compute safe-sets for non-convex region using admissible sets (x \in X, u \in U) and non-convex decomposed into halfspaces
+        # Launch jobs (round-robin over engines)
+        job_list = []  # (i_obs, i_facet, future)
+        eng_idx = 0
+        if self.Fx_hs_list is not None and self.fx_hs_list is not None:
+            for i_obs, (Fx_hs_block, fx_hs_block) in enumerate(zip(self.Fx_hs_list, self.fx_hs_list)):
+                jobs = []
+                for i_facet, (F_i, f_i) in enumerate(zip(Fx_hs_block, fx_hs_block)):
+                    if F_i.shape[1] != self.A.shape[0]:
+                        raise ValueError(
+                            f"Fx[{i_obs}][{i_facet}] has {F_i.shape[1]} cols but A has {self.A.shape[0]} rows."
+                        )
+                    eng = engines[eng_idx % num_engines]
+                    eng_idx += 1
+
+                    Fx_hs_ml = matlab.double(np.asarray(F_i, dtype=float).tolist())
+                    fx_hs_ml = matlab.double(np.asarray(f_i, dtype=float).reshape(-1, 1).tolist())
+
+                    if has_T:
+                        fut = eng.computeRCIS_extract(
+                            A_ml, B_ml, Fx_hs_ml, fx_hs_ml, Gu_ml, gu_ml,
+                            E_ml, Gw_ml, Fw_ml, implicit_ml, L, T,
+                            nargout=3, background=True
+                        )
+                    else:
+                        fut = eng.computeRCIS_extract(
+                            A_ml, B_ml, Fx_hs_ml, fx_hs_ml, Gu_ml, gu_ml,
+                            E_ml, Gw_ml, Fw_ml, implicit_ml, L,
+                            nargout=3, background=True
+                        )
+                    jobs.append((i_obs, i_facet, fut))
+                job_list.append(jobs)
+
+            # Collect
+            Cx_dis_list = []
+            cx_dis_list = []
+
+            for i, jobs in tqdm(enumerate(job_list)):
+                C_ = []
+                c_ = []
+                for j, (i_obs, i_facet, fut) in tqdm(enumerate(jobs)):
+                    H_cell, f_cell, volume = fut.result()  # numeric-only types ✔
+                    # Convert MATLAB cell -> Python lists of numpy arrays
+                    # def _cell_to_np_list(cell): return [np.array(c, dtype=float) for c in cell]
+                    H_struct = np.array(H_cell[0], dtype=float)
+                    f_struct = np.array(f_cell[0], dtype=float).squeeze()
+                    if H_struct.size != 0:
+                        C_.append(H_struct)
+                        c_.append(f_struct)
+                Cx_dis_list.append(C_)
+                cx_dis_list.append(c_)
                 
-                # Launch asynchronous MATLAB computations for each condition using available engines
-                eng = engines[engine_idx % num_engines]  # Rotate among engines
-                engine_idx += 1
-                Gx_matlab = matlab.double(Fx.tolist())
-                bx_matlab = matlab.double(fx.tolist())
+            self.Cx_dis_list = Cx_dis_list
+            self.cx_dis_list = cx_dis_list
+        else:
+            self.Cx_dis_list = None
+            self.cx_dis_list = None
 
-                # Run MATLAB function asynchronously and store the future
-                future = eng.computeRCIS_py(
-                    self.A_matlab, self.B_matlab, Gx_matlab, bx_matlab,
-                    self.Gu_matlab, self.gu_matlab, self.E_matlab, self.Gw_matlab, self.Fw_matlab, implicit_matlab, L, T, self.matlab_cis_path , cis_method, nargout=3, background=True
-                )
-                solutions.append(future)
+        # compute safe-sets for convex region using admissible sets (x \in X, u \in U)
+        if isinstance(self.Fx, np.ndarray) and isinstance(self.fx, np.ndarray):
+            Fx_ml, fx_ml = self._to_ml_mat(self.Fx), self._to_ml_col(self.fx)
+            res = eng.computeRCIS_extract(
+                A_ml, B_ml, Fx_ml, fx_ml, Gu_ml, gu_ml,
+                E_ml, Gw_ml, Fw_ml, implicit_ml, L,
+                nargout=3, background=True
+            )
 
-            solution_list.append(solutions)
+            H_cell, f_cell, volume = res.result()
+            self.Cx = np.array(H_cell[0], dtype=float)
+            self.cx = np.array(f_cell[0], dtype=float).squeeze()
+        else:
+            self.Cx = None
+            self.cx = None
 
-        # Collect results once all computations are started
-        C_list = []
-        c_list = []
-        for solution_list_ in tqdm(solution_list):
-            C_list_ = []
-            c_list_ = []
-            for solution_ in solution_list_:
-                print("\n <<< Box number: >>>", idx)
-                [H_struct, f_struct, volume] = solution_.result()  # Retrieve MATLAB result
-                H_struct = ExtractCIS.convert_matlab_data(H_struct)
-                f_struct = ExtractCIS.convert_matlab_data(f_struct)
-                volume = ExtractCIS.convert_matlab_data(volume)
-                C_list_.append(H_struct)
-                c_list_.append(f_struct)
-            C_list.append(C_list_)
-            c_list.append(c_list_)
-
-        self.C_list = C_list
-        self.c_list = c_list
-
-        # print ("Computing CIS for OUTER BOX")
-        # # compute CIS only for convex set, i.e only for outer box
-        # Gx_matlab = matlab.double(self.Gx_inc.tolist())
-        # bx_matlab = matlab.double(self.bx_inc.reshape(-1, 1).tolist()) 
-        # eng = self.start_matlab_engine(self.matlab_cis_path, self.python_to_matlab_function_path)
-        # engines.append(eng)
-        # # Call the MATLAB function computeRCIS
-        # [H_struct, f_struct, volume] = eng.computeRCIS_py(
-        #     A_matlab, B_matlab, Gx_matlab, bx_matlab, 
-        #     Gu_matlab, bu_matlab,  E_matlab, Gw_matlab, Fw_matlab, implicit_matlab, L, T, self.matlab_cis_path , cis_method, nargout=3)  
-
-        # H_struct = ExtractCIS.convert_matlab_data(H_struct)
-        # f_struct = ExtractCIS.convert_matlab_data(f_struct)
-        # volume = ExtractCIS.convert_matlab_data(volume)
-        
-        # self.cis_data.append({})
-        # # Check if it's initialized and then add data
-        # # if 'H_struct' not in self.cis_data[-1]:
-        # self.cis_data[-1]['H_struct'] = H_struct
-        # # if 'f_struct' not in self.cis_data[-1]:
-        # self.cis_data[-1]['f_struct'] = f_struct
-        # # if 'volume' not in self.cis_data[-1]:
-        # self.cis_data[-1]['volume'] = volume
-
-        # self.save_data()
-
-        # Close all MATLAB engines
         for eng in engines:
-            eng.quit()
-            
-    def save_data(self):
-        filename = self.safe_set_path
-        np.save(filename, self.cis_data)
+            try: eng.quit()
+            except Exception: pass
 
-        cis_data_matlab = self.convert_numpy_data(self.cis_data)
-        # # Save the list of structs as 'cis_data' in MATLAB format
-        filename = ('/').join(filename.split('.')[:-1])
-        sio.savemat(filename + '.mat', {'cis_data': cis_data_matlab})
 
-    def convert_numpy_data(self, data):
-
-        
-        last_idx = len(data) - 1
-        cis_data_matlab = []
-        for k, data_ in enumerate(data):
-            cis_data_matlab_ = []
-            # Create a list to store structs (to mimic MATLAB struct arrays)
-            if last_idx == k:
-                # Handle the last index with H_struct, f_struct, and volume
-                cis_data_matlab_.append({
-                    'H_struct': np.array(data_['H_struct'].items()),
-                    'f_struct': np.array(data_['f_struct'].items()),
-                    'volume': np.array(data_['volume'])
-                })
-            else:
-                # Loop through the Python dictionary and create a MATLAB struct array
-                for i, key in enumerate(data_):
-                    # Check if the current data is the last index with different structure
-                    # Al and Au are lists of matrices of different sizes
-                    Al_list = {'key_'+str(k+1): np.array(mat) for k, mat in data_[key]['Al'].items()}  # Al as a list of NumPy arrays
-                    Au_list = {'key_'+str(k+1): np.array(mat) for k, mat in data_[key]['Au'].items()}  # Au as a list of NumPy arrays
-
-                    # bl, bu, volume_l, volume_u are dictionaries with indices, so we convert them to structs
-                    bl_struct = {'key_'+str(k+1): np.array(v) for k, v in data_[key]['bl'].items()}  # Convert bl to struct-like
-                    bu_struct = {'key_'+str(k+1): np.array(v) for k, v in data_[key]['bu'].items()}  # Convert bu to struct-like
-                    volume_l_struct = {'volume_l': data_[key]['volume_l']}  # Convert volume_l to struct-like
-                    volume_u_struct = {'volume_u': data_[key]['volume_u']}  # Convert volume_u to struct-like
-
-                    # Append the struct-like dictionary to the list
-                    cis_data_matlab_.append({
-                        'Al': Al_list,  # Store list of matrices for Al
-                        'bl': bl_struct,  # Store bl as a struct-like dictionary
-                        'Au': Au_list,  # Store list of matrices for Au
-                        'bu': bu_struct,  # Store bu as a struct-like dictionary
-                        'volume_l': volume_l_struct,  # Store volume_l as a struct-like dictionary
-                        'volume_u': volume_u_struct  # Store volume_u as a struct-like dictionary
-                    })
-            cis_data_matlab.append(cis_data_matlab_)
-
-        return cis_data_matlab
-    
     @staticmethod
     def add_path( eng, path):
         generated_path = eng.genpath(path)
@@ -227,37 +202,71 @@ class ExtractCIS:
             os.kill(MatlabId, signal.SIGINT)
 
     @staticmethod
-    def start_matlab_engine(matlab_cis_path, python_to_matlab_function_path):
-        # print ("psutil.process_iter()", psutil.process_iter())
-
+    def start_matlab_engine(matlab_cis_path):
         #matlab engine 
         eng = matlab.engine.start_matlab()
-        
-        # Define the path to the directory containing the MATLAB function
-        # matlab_cis_path = "/home/shivam/Dropbox (Aalto)/research_work/codes/assistive_system/dev/github_code/cis2m/matlab/"
+
+        print ("matlab engine started: path", matlab_cis_path)
         ExtractCIS.add_path(eng, matlab_cis_path)
-
-        # python_to_matlab_function_path = "/home/shivam/Dropbox (Aalto)/research_work/codes/assistive_system/dev/realtime_MPC/lib/"
-        ExtractCIS.add_path(eng, python_to_matlab_function_path)
-
-        # # Verify if the path exists in MATLAB’s search path
-        # current_path = eng.path()
-        # if matlab_function_path in current_path:
-        #     print("Path added successfully")
-        # else:
-        #     print("Path not added")
         return eng
 
     @staticmethod
     def quit_matlab(eng):
         eng.quit()
 
-def extract_cis(variables, cfg):
-    use_matlab = True
-    print ("extracting CIS")
-    extract_cis = ExtractCIS(variables, cfg, use_matlab = use_matlab)
-    extract_cis.compute_inequality()
-    extract_cis.compute_cis()
+    def save_cis_npz(self):
+        
+        out_path = self.cfg.save_cis_path
+
+        # Ensure path & extension
+        out_path = os.fspath(out_path)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        if not out_path.lower().endswith(".npz"):
+            out_path += ".npz"
+
+        # Pack data (object arrays for nested lists)
+        pack = {
+            # Computed convex state safe set CIS constraint
+            "Cx": np.array(self.Cx, dtype=float) if self.Cx is not None else None,
+            "cx": np.array(self.cx, dtype=float).squeeze() if self.cx is not None else None,
+
+            # Computed disjunctive state safe set CIS constraints 
+            "Cx_dis_list":   np.array(self.Cx_dis_list, dtype=object) if self.Cx_dis_list is not None else None,
+            "cx_dis_list":   np.array(self.cx_dis_list, dtype=object) if self.cx_dis_list is not None else None,
+
+            # system
+            "A":  np.asarray(self.A, dtype=float),
+            "B":  np.asarray(self.B, dtype=float),
+
+            # original convex state constraints used as input to CIS
+            "Fx": np.asarray(self.Fx, dtype=float) if self.Fx is not None else None,
+            "fx": np.asarray(self.fx, dtype=float).squeeze() if self.fx is not None else None,
+
+            # original disjunctive state constraints used as input to CIS
+            "Fx_hs_list": np.array(self.Fx_hs_list, dtype=object) if self.Fx_hs_list is not None else None,
+            "fx_hs_list": np.array(self.fx_hs_list, dtype=object) if self.fx_hs_list is not None else None,
+
+            # input constraints
+            "Gu": np.asarray(self.Gu, dtype=float) if self.Gu is not None else None,
+            "gu": np.asarray(self.gu, dtype=float).squeeze() if self.gu is not None else None,
+
+            # disturbance mapping & set
+            "E":  np.asarray(self.E,  dtype=float) if self.E  is not None else None,
+            "Gw": np.asarray(self.Gw, dtype=float) if self.Gw is not None else None,
+            "Fw": np.asarray(self.Fw, dtype=float).squeeze() if self.Fw is not None else None,
+            # alias for user’s naming (sometimes they refer to 'fw')
+            "fw": np.asarray(self.Fw, dtype=float).squeeze() if self.Fw is not None else None,
+
+            # CIS config
+            "L": float(self.L) if getattr(self, "L", None) is not None else np.nan,
+            "T": float(self.T) if getattr(self, "T", None) is not None else np.nan,
+            "implicit": bool(getattr(self, "cis_method", False)),
+        }
+
+        # Save compressed .npz
+        np.savez_compressed(out_path, **pack)
+        print(f"[CIS] Saved to: {out_path}")
+        return out_path
 
 if __name__ == "__main__":
 
@@ -267,38 +276,31 @@ if __name__ == "__main__":
     project_root = Path(__file__).resolve().parent.parent
     
     sys.path.insert(0, str(project_root) +'/')
-    from config1 import config
+    from config import config
     cfg = config()
 
-    from helper import ConstraintHelper
+    from constraint_builder import ConstraintHelper
 
     helper = ConstraintHelper(eps=0.0)
 
-    Workspace = np.array([[178, 47], [704, 47], [704, 817], [178, 817]], dtype=float)
-    Obs1 = np.array([[568, 429], [703, 429], [703, 816], [568, 816]], dtype=float)
-    Obs2 = np.array([[308, 181], [438, 181], [438, 691], [308, 691]], dtype=float)
-    Obs3 = np.array([[437,  47], [568,  47], [568, 309], [437, 309]], dtype=float)
-    vel_vertices   = np.array([[0.05, 0.05], [0.05, -0.05], [-0.05, -0.05], [-0.05, 0.05]], dtype=float)
-    accel_vertices = np.array([[1.0, 1.0], [1.0, -1.0], [-1.0, -1.0], [-1.0, 1.0]], dtype=float)
-
-    Fx_list, fx_list, Gu, gu = helper.construct_state_constraints(
-        workspace_vertices=Workspace,
-        obstacle_vertices_list=[Obs1, Obs2, Obs3],
-        vel_vertices=vel_vertices,
-        accel_vertices=accel_vertices,
+    Fx, fx, Fx_hs_list, fx_hs_list, Gu, gu = helper.construct_state_constraints(
+        workspace_vertices=cfg.Workspace,
+        obstacle_vertices_list=cfg.Obs,
+        vel_vertices=cfg.vel_vertices,
+        accel_vertices=cfg.accel_vertices,
     )
-    # print("Fx_list:", Fx_list)
-    # print("fx_list:", fx_list)
-    # print("Gu:", Gu)
-    # print("gu:", gu)
-
-    E = cfg.E
-    Gw = cfg.Gw
-    Fw = cfg.Fw
+    cfg.Fx = Fx
+    cfg.fx = fx
+    cfg.Fx_hs_list = Fx_hs_list
+    cfg.fx_hs_list = fx_hs_list
+    cfg.Gu = Gu
+    cfg.gu = gu
 
     from CIS_computation import ExtractCIS
-    cis_builder = ExtractCIS(cfg, Fx_list = Fx_list, fx_list = fx_list,
-                    Gu = Gu, gu = gu, E = E, Gw = Gw, 
-                    Fw = Fw, use_matlab = False, safe_set_path = None)
+    cis_builder = ExtractCIS(cfg)
 
     cis_builder.compute_cis()
+    cis_builder.save_cis_npz()
+    # print("CIS computation finished.")
+    # print("Cx_dis_list:", cis_builder.Cx_dis_list)
+    # print("cx_dis_list:", cis_builder.cx_dis_list)

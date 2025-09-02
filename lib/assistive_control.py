@@ -7,25 +7,24 @@ from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root) +'/')
-import config1
+import config as config
 
-class MIQSingleStep:
+class AssistiveControl:
     """
     One-step MIQP builder/solver that follows the MPC_CIS_testing.py block structure with sparse matrices.
     Decision vector: z = [x_k (n); x_{k+1} (n); u_k (m); p_vec (n_bin)]
     """
 
-    def __init__(self, A, B, Fxmat, fxvec, Gumat, guvec,
-                 T_list=None, t_list=None, C_list=None, c_list=None,
+    def __init__(self, A, B, CFxmat, cfxvec, Gumat, guvec,
+                C_list=None, c_list=None,
                  M=10e8, u_ref=None,
                  gurobi_params=None, method="cvxpy", warm_start=False, solver_verbose=False):
         """
         Args:
             A, B: system matrices
             ## not needed if
-            Fxmat, fxvec:  convex state sets, each pair (Gx_i, Fx_i) s.t. Gx_i @ x <= Fx_i
+            CFxmat, cfxvec:  convex state sets, each pair (Gx_i, Fx_i) s.t. Gx_i @ x <= Fx_i
             Gumat, fuvec:  convex input sets, each pair (Gu_i, Fu_i) s.t. Gu_i @ u <= Fu_i
-            T_list, t_list:   (optional) unsafe-set half-spaces;  T_list = [ np.array([T0,0]), ..., np.array([Ti,j])],  {T i,j x ≤ ti,j}, i in no. of convex unsafe region, j in no. of edges
             C_list, c_list:   (optional) RCIS region; list(list(np.array())) [[np.array([C0,0]), np.array([C0,0]), np.array([C0,0])], ..., np.array([Ci,j])]]  Ci,j x ≤ ci,j 
             M: Big-M constant
             u_ref: references (defaults 0)
@@ -40,13 +39,11 @@ class MIQSingleStep:
         self.n = self.A.shape[0]
         self.m = self.B.shape[1]
 
-        self.Fxmat = Fxmat if Fxmat is not None else sp.csr_matrix((0, self.n))
-        self.fxvec = fxvec if fxvec is not None else np.zeros(self.Fxmat.shape[0])
+        self.CFxmat = CFxmat if CFxmat is not None else sp.csr_matrix((0, self.n))
+        self.cfxvec = cfxvec if cfxvec is not None else np.zeros(self.CFxmat.shape[0])
         self.Gumat = Gumat if Gumat is not None else sp.csr_matrix((0, self.m))
         self.guvec = guvec if guvec is not None else np.zeros(self.Gumat.shape[0])
 
-        self.T_list = T_list or []
-        self.t_list = t_list or []
         self.C_list = C_list or []
         self.c_list = c_list or []
 
@@ -98,10 +95,12 @@ class MIQSingleStep:
             print("Warning: solver status is", res['status'])
             self.xnext = None
             self.u_asst = None
+            self.p_bin = None
             self.feasible = 0
         else:    
             self.xnext = res['z'][self.n:self.n*2].ravel()
             self.u_asst = res['z'][self.n*2:self.n*2+self.m].ravel()
+            self.p_bin = res['z'][self.n*2+self.m:].ravel()
             self.feasible = 1
 
         ## To Do: implement containment test: if check containment else: optimize
@@ -135,10 +134,10 @@ class MIQSingleStep:
     def construct_state_convex_inequalities(self):
         # Extend Fmat to act on xvec_k = { [x_k, x_{k+1}] ∈ R^{2n} | [0 | F][x_k, x_{k+1}].T <= f }
         self.Fcal = sp.hstack([      
-                              sp.csr_matrix((self.Fxmat.shape[0], self.n)),   # zeros but sparse
-                              self.Fxmat              # ensure Fxmat is sparse
+                              sp.csr_matrix((self.CFxmat.shape[0], self.n)),   # zeros but sparse
+                              self.CFxmat              # ensure CFxmat is sparse
                               ], format="csr")                           
-        self.fvec = self.fxvec
+        self.fvec = self.cfxvec
 
 
     def construct_control_convex_inequalities(self):
@@ -158,13 +157,14 @@ class MIQSingleStep:
         Epvec_lb = []
         Epvec_ub = []
 
-        for C_i, c_i in zip(C_list, c_list):
+        for i, (C_i, c_i) in enumerate(zip(C_list, c_list)):
             # ----- MCIS inequality pieces -----
-            for C_ij, c_ij in zip(C_i, c_i):
+            for j, (C_ij, c_ij) in enumerate(zip(C_i, c_i)):
                 C_ij = sp.csr_matrix(C_ij) if not sp.issparse(C_ij) else C_ij
                 c_ij = np.asarray(c_ij).ravel()
                 mC_ij = C_ij.shape[0]
-
+                print ("i, j", i, j)
+                print ("sp.csr_matrix((mC_ij, n)),", sp.csr_matrix((mC_ij, n)).shape)
                 # [0_{mC_ij x n}, C_ij] applied to [x_k; x_{k+1}]
                 Ccal_ij = sp.hstack([sp.csr_matrix((mC_ij, n)), C_ij], format="csr")
                 Ccal_blocks.append(Ccal_ij)
@@ -252,53 +252,56 @@ class MIQSingleStep:
         self.qp = 0*sp.csr_matrix((self.n_bin, 1))
         self.qvec = sp.vstack([self.qx, self.qu, self.qp], format="csr")
 
-def extract_nonconvex_CIS(safe_set):
-    print("Extracting non-convex CIS ........")
-    nonconvex_set = safe_set[:-1]
-    C_list = []
-    c_list = []
-    for i in range(len(nonconvex_set)):
-        C_i = []
-        c_i = []
-        for j in range(len(nonconvex_set[i])):
-
-            Al = nonconvex_set[i][j]['Al'][0]
-            Au = nonconvex_set[i][j]['Au'][0]
-            bl = nonconvex_set[i][j]['bl'][0].squeeze()
-            bu = nonconvex_set[i][j]['bu'][0].squeeze()
-            print (Al.shape, bl.shape, Au.shape, bu.shape)
-            if Al.shape[1] > 0:
-                C_i.append(Al)
-                c_i.append(bl)
-            if Au.shape[1] > 0:
-                C_i.append(Au)
-                c_i.append(bu)
-
-        C_list.append(C_i)
-        c_list.append(c_i)
-
-    return C_list, c_list
-
-def extract_convex_CIS(safe_set):
-    print ("Extracting convex CIS .........")
-    idx = len(safe_set) - 1
-    convex_set = safe_set[idx].copy()
-    Cx = convex_set['H_struct'][0]
-    cx_ = convex_set['f_struct'][0].squeeze()
-    return Cx, cx_
 
 if __name__ == "__main__":
-    cfg = config1.config()
+    cfg = config.config()
+    import matplotlib.pyplot as plt
+    from visualization import Plotter
+    from helper import load_cis_npz
+
+    saved_CIS = load_cis_npz(cfg.save_cis_path)
+
+    A = saved_CIS["A"]
+    B = saved_CIS["B"]
+    Cx = saved_CIS["Cx"]
+    cx = saved_CIS["cx"]
+    Cx_dis_list = saved_CIS["Cx_dis_list"]
+    cx_dis_list = saved_CIS["cx_dis_list"]
+    Fx_hs_list = saved_CIS["Fx_hs_list"]
+    fx_hs_list = saved_CIS["fx_hs_list"]
+    Gu = saved_CIS["Gu"]
+    gu = saved_CIS["gu"]
+    E = saved_CIS["E"]
+    Gw = saved_CIS["Gw"]
+    Fw = saved_CIS["Fw"]
+    fw = saved_CIS["fw"]
+    Fx = saved_CIS["Fx"]
+    fx = saved_CIS["fx"]
+    
+    # concatenate workspace and obstacle for plotting
+    obs_Fx = cfg.obs_Fx.copy()
+    obs_Fx.append(Fx)
+    obs_fx = cfg.obs_fx.copy()
+    obs_fx.append(fx)
+
+    plotter = Plotter(obs_Fx, obs_fx, axes=(0,1), title="Simulation Plot")
+
+    # C_list = saved_CIS["C_list"]
+    # c_list = saved_CIS["c_list"]
+
+
     N = 100
     xref = []
-    uref = [[0.1, 0.1] for i in range(N-1)]
-    F = cfg.Fx
-    f = cfg.fx
-    A = cfg.A; B = cfg.B
+    uref = [[0.1, -1] for i in range(N-1)]
+    # F = cfg.Fx
+    # f = cfg.fx
+    F = None; f = None
+    # A = cfg.A; B = cfg.B
     G = None; g = None
-    C_list = cfg.C_list; c_list = cfg.c_list
-    miqp = MIQSingleStep(A, B, Fxmat = F, fxvec = f, Gumat = G, guvec = g,
-                    T_list=None, t_list=None, C_list=C_list, c_list=c_list,
+    # C_list = cfg.C_list; c_list = cfg.c_list
+
+    miqp = AssistiveControl(A, B, CFxmat = Cx, cfxvec = cx, Gumat = G, guvec = g,
+                    C_list=Cx_dis_list, c_list=cx_dis_list,
                     M=10e8, u_ref=None,
                     gurobi_params=None, method = "gurobi", warm_start=False)
 
@@ -342,12 +345,13 @@ if __name__ == "__main__":
     N = 100
     uref = np.vstack([np.ones((1, N)), np.zeros((1, N))]).T
     print(uref)
-    x0 = np.array([0.695, 0.160, 0.055, 0.055])
+    x0 = np.array([0.695, 0.160, 0.045, 0.045])
 
     x_hist = [x0]
     u_hist = []
     feasible_list = []
     import time
+    plt.ion()
     for i in range(N):
         print ("iteration", i)
         ### MPC 
@@ -377,6 +381,17 @@ if __name__ == "__main__":
         print("next_x", x0)
         x_hist.append(x0)
         u_hist.append(u_asst)
+
+        # visualization
+        plotter.set_point(x0)
+        vel = np.array(x_hist)[:, 2:4]
+        len_vel = vel.shape[0]
+        t = np.arange(0.1, len_vel*0.1+0.001, 0.1)
+        # print (t)
+        # print (vel)
+        plotter.set_velocity(vel, xlim=0.1*i)
+        # time.sleep(0.1)
+        plt.pause(0.1)
 
     x_hist = np.array(x_hist)
     u_hist = np.array(u_hist)

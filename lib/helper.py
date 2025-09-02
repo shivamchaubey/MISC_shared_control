@@ -1,12 +1,62 @@
-# constraints_helper.py
 import numpy as np
 import polytope
-from typing import List, Tuple
-from nonconvex_decomposition import NonConvexDecomposition  # your class with .build()
 
+def load_cis_npz(path):
+    """Load CIS .npz and return a handy dict with Python-native types."""
+    data = np.load(path, allow_pickle=True)
+
+    out = {
+        # compact CIS: nested list of [H|f] arrays (each is shape (m_i, n+1))
+        # split forms, if you want them
+        # system and constraints
+        "A":  data["A"],
+        "B":  data["B"],
+        "Cx_dis_list": data["Cx_dis_list"].tolist(),
+        "cx_dis_list": data["cx_dis_list"].tolist(),
+        "Cx": data["Cx"],
+        "cx": data["cx"], 
+        "Fx": data["Fx"],
+        "fx": data["fx"],
+        "Fx_hs_list": data["Fx_hs_list"].tolist(),
+        "fx_hs_list": data["fx_hs_list"].tolist(),
+        "Gu": data["Gu"],
+        "gu": data["gu"],
+        "E":  data["E"],
+        "Gw": data["Gw"],
+        "Fw": data["Fw"],
+        "fw": data["fw"],  # alias
+
+        # config/meta (stored as a Python dict)
+        "L": data["L"].item(),
+        "T": data["T"].item(),
+        "implicit": bool(data["implicit"]),
+    }
+    return out
+
+# ---------- polytope projection helpers ----------
+def _project_poly_H(F, f, axes=(0, 1)):
+    """
+    Project H-rep {x | F x <= f} to 2D axes and return (Fp, fp).
+    Uses 1-based dims for tulip-control/polytope compatibility.
+    """
+    P = polytope.Polytope(np.asarray(F, float), np.asarray(f, float).reshape(-1))
+    dims = (np.array(axes, int) + 1).tolist()
+    Pp = P.project(dims)
+    return np.asarray(Pp.A, float), np.asarray(Pp.b, float).reshape(-1)
+
+def _project_Fx_list(Fx_list, fx_list, axes=(0, 1)):
+    Fp_list, fp_list = [], []
+    for F, f in zip(Fx_list, fx_list):
+        Fp, fp = _project_poly_H(F, f, axes=axes)
+        Fp_list.append(Fp); fp_list.append(fp)
+    return Fp_list, fp_list
+# -------------------------------------------------
+
+
+#--------- For handeling polytope -------
+from typing import List, Tuple
 Array = np.ndarray
 HRep = Tuple[Array, Array]  # (F, f) meaning F x <= f
-
 
 def xywh_to_vertices(xywh: Array) -> Array:
     x, y, w, h = np.asarray(xywh, dtype=float).ravel()
@@ -17,91 +67,55 @@ def verts_to_hrep(vertices: Array) -> HRep:
     P = polytope.qhull(np.asarray(vertices, dtype=float))
     return np.asarray(P.A, dtype=float), np.asarray(P.b, dtype=float)
 
-
-class ConstraintHelper:
+# ---- only for circular robot (quickest) ----
+def inflate_obstacle_poly(A: np.ndarray, b: np.ndarray, r: float):
     """
-    Build state and input constraints for state layout [x, y, vx, vy].
-
-    - Safe state sets are AND'ed (stacked).
-    - Unsafe convex obstacles are decomposed into facet-wise 'outside' disjuncts.
-      NonConvexDecomposition(eps).build(...) returns Fx_list, fx_list.
-    - Acceleration constraints (Gu, gu) are built directly in u-space from vertices.
+    Inflate obstacle P={x|Ax<=b} by a disk of radius r: A x <= b + r||a_i||_2.
     """
+    row_norms = np.linalg.norm(np.asarray(A, float), axis=1)
+    return A, np.asarray(b, float).reshape(-1) + r * row_norms
 
-    def __init__(self, eps: float = 0.0):
-        self.eps = float(eps)
-        self._pos_dim = 2
-        self._vel_dim = 2
-        self._state_dim = self._pos_dim + self._vel_dim
+def deflate_workspace_poly(A: np.ndarray, b: np.ndarray, r: float):
+    """
+    Deflate workspace P={x|Ax<=b} by a disk of radius r: A x <= b - r||a_i||_2.
+    """
+    row_norms = np.linalg.norm(np.asarray(A, float), axis=1)
+    return A, np.asarray(b, float).reshape(-1) - r * row_norms
 
-    # ---- individual builders ----
-    def workspace_constraints(self, workspace_vertices: Array) -> HRep:
-        A, b = verts_to_hrep(workspace_vertices)          # A[x,y] <= b
-        F = np.hstack([A, np.zeros((A.shape[0], self._vel_dim))])  # lift to [x,y,vx,vy]
-        return F, b
-
-    def velocity_constraints(self, vel_vertices: Array) -> HRep:
-        A, b = verts_to_hrep(vel_vertices)                # A[vx,vy] <= b
-        F = np.hstack([np.zeros((A.shape[0], self._pos_dim)), A])  # lift to [x,y,vx,vy]
-        return F, b
-
-    def obstacle_constraints(self, obstacle_vertices_list: List[Array]) -> List[HRep]:
-        out = []
-        for V in obstacle_vertices_list:
-            A, b = verts_to_hrep(V)                       # A[x,y] <= b  (inside unsafe)
-            F = np.hstack([A, np.zeros((A.shape[0], self._vel_dim))])  # lift
-            out.append((F, b))
-        return out
-
-    def acceleration_constraints(self, accel_vertices: Array) -> HRep:
-        # u-space constraints (no lifting), Gu*u <= gu with u=[ax, ay]
-        return verts_to_hrep(accel_vertices)
-
-    # ---- main helper ----
-    def construct_state_constraints(
-        self,
-        workspace_vertices: Array,
-        obstacle_vertices_list: List[Array],
-        vel_vertices: Array,
-        accel_vertices: Array,
-    ):
-        """
-        Returns
-        -------
-        Fx_list, fx_list : lists for disjunctive state constraints (per obstacle, per facet)
-        Gu, gu           : input-space (acceleration) constraints
-        """
-        F_w, f_w = self.workspace_constraints(workspace_vertices)
-        F_v, f_v = self.velocity_constraints(vel_vertices)
-        safe_state_sets = [(F_w, f_w), (F_v, f_v)]
-
-        unsafe_state_sets = self.obstacle_constraints(obstacle_vertices_list)
-
-        decomp = NonConvexDecomposition(eps=self.eps)
-        Fx_list, fx_list = decomp.build(safe_state_sets, unsafe_state_sets)
-
-        Gu, gu = self.acceleration_constraints(accel_vertices)
-        return Fx_list, fx_list, Gu, gu
+#--------------------------------------------------
 
 
-if __name__ == "__main__":
+# def extract_nonconvex_CIS(safe_set):
+#     print("Extracting non-convex CIS ........")
+#     nonconvex_set = safe_set[:-1]
+#     C_list = []
+#     c_list = []
+#     for i in range(len(nonconvex_set)):
+#         C_i = []
+#         c_i = []
+#         for j in range(len(nonconvex_set[i])):
 
-    helper = ConstraintHelper(eps=0.0)
+#             Al = nonconvex_set[i][j]['Al'][0]
+#             Au = nonconvex_set[i][j]['Au'][0]
+#             bl = nonconvex_set[i][j]['bl'][0].squeeze()
+#             bu = nonconvex_set[i][j]['bu'][0].squeeze()
+#             print (Al.shape, bl.shape, Au.shape, bu.shape)
+#             if Al.shape[1] > 0:
+#                 C_i.append(Al)
+#                 c_i.append(bl)
+#             if Au.shape[1] > 0:
+#                 C_i.append(Au)
+#                 c_i.append(bu)
 
-    Workspace = np.array([[178, 47], [704, 47], [704, 817], [178, 817]], dtype=float)
-    Obs1 = np.array([[568, 429], [703, 429], [703, 816], [568, 816]], dtype=float)
-    Obs2 = np.array([[308, 181], [438, 181], [438, 691], [308, 691]], dtype=float)
-    Obs3 = np.array([[437,  47], [568,  47], [568, 309], [437, 309]], dtype=float)
-    vel_vertices   = np.array([[0.05, 0.05], [0.05, -0.05], [-0.05, -0.05], [-0.05, 0.05]], dtype=float)
-    accel_vertices = np.array([[1.0, 1.0], [1.0, -1.0], [-1.0, -1.0], [-1.0, 1.0]], dtype=float)
+#         C_list.append(C_i)
+#         c_list.append(c_i)
 
-    Fx_list, fx_list, Gu, gu = helper.construct_state_constraints(
-        workspace_vertices=Workspace,
-        obstacle_vertices_list=[Obs1, Obs2, Obs3],
-        vel_vertices=vel_vertices,
-        accel_vertices=accel_vertices,
-    )
-    print("Fx_list:", Fx_list)
-    print("fx_list:", fx_list)
-    print("Gu:", Gu)
-    print("gu:", gu)
+#     return C_list, c_list
+
+# def extract_convex_CIS(safe_set):
+#     print ("Extracting convex CIS .........")
+#     idx = len(safe_set) - 1
+#     convex_set = safe_set[idx].copy()
+#     Cx = convex_set['H_struct'][0]
+#     cx_ = convex_set['f_struct'][0].squeeze()
+#     return Cx, cx_
