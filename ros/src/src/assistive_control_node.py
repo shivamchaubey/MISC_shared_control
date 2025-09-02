@@ -120,7 +120,7 @@ class AssistiveControlNode:
             if self.verbose :
                 rospy.loginfo(f"Received State: {repr(x0.tolist())}, Next step: {repr(x_next.tolist())} , "
                                f"\n user ctrl: {repr(u_user)}, asst ctrl: {repr(u)}, Feasible: {bool(feasible)}"
-                               f"Feasible: {bool(feasible)}, Controller Frequency: {freq}")
+                               f"Controller Frequency: {freq}")
 
             # publish controller computation time:
             comp_freq = Float32()
