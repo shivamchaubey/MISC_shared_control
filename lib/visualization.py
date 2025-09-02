@@ -52,7 +52,7 @@ def resize_polyhedron(cfg):
     env_Fx.append(ws_Fx); env_fx.append(ws_fx)
     return env_Fx, env_fx
 
-class plotter():
+class Plotter():
     def __init__(self, cfg):
 
 

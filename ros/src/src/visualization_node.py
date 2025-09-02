@@ -43,7 +43,7 @@ sys.path.insert(0, str(project_root) +'/')
 import config as cfg
 cfg = cfg.config()
 sys.path.insert(1, cfg.lib_path)
-from visualization import plotter
+from visualization import Plotter
 
 class ROSPlotter:
     def __init__(self):
@@ -73,7 +73,7 @@ class ROSPlotter:
 
         # for plotter
         rotate_pose_180 = True
-        self.visual = plotter(cfg)
+        self.visual = Plotter(cfg)
         plt.ion()
         self.fig, self.plot, self.ax_pose, self.ax_vel, self.ax_ctrl, self.traj, self.pose, self.feas_button, self.robot, self.vel_x, self.vel_y, self.ctrl_x_ass, self.ctrl_y_ass, self.ctrl_x_user, self.ctrl_y_user = self.visual.plot_combined(rotate_pose_180 = rotate_pose_180)
 
