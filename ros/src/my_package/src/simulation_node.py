@@ -11,6 +11,18 @@ sys.path.insert(0, str(project_root) +'/')
 import config as cfg
 cfg = cfg.config()
 
+def sample_disturbance(Gw, Fw):
+    ## bias + noise 
+    # assumes Gw is block diagonal +/-I, so it's just bounds
+    bounds = []
+    for i in range(Gw.shape[1]):
+        # find upper and lower bound for w_i
+        inds_pos = np.where(Gw[:, i] == 1)[0]
+        inds_neg = np.where(Gw[:, i] == -1)[0]
+        ub = np.min(Fw[inds_pos]) if len(inds_pos) > 0 else np.inf
+        lb = -np.min(Fw[inds_neg]) if len(inds_neg) > 0 else -np.inf
+        bounds.append((lb, ub))
+    return np.array([np.random.uniform(lb, ub) for lb, ub in bounds])
 
 class SystemSimulationNode:
     def __init__(self):
@@ -62,16 +74,18 @@ class SystemSimulationNode:
         next_state = self.A@curr_x + self.B@u
         if self.apply_disturbance:
 
-            nw = self.E.shape[1]
-            I  = np.eye(nw)
-            assert self.Gw.shape == (2*nw, nw), "Expect Gw = [I; -I] for simple box."
-            assert np.allclose(self.Gw[:nw], I) and np.allclose(self.Gw[nw:], -I)
+            # nw = self.E.shape[1]
+            # I  = np.eye(nw)
+            # assert self.Gw.shape == (2*nw, nw), "Expect Gw = [I; -I] for simple box."
+            # assert np.allclose(self.Gw[:nw], I) and np.allclose(self.Gw[nw:], -I)
 
-            ub = self.Fw[:nw].reshape(nw,1)      # upper bounds
-            lb = -self.Fw[nw:].reshape(nw,1)     # lower bounds
-            w  = np.random.uniform(lb, ub, size=(nw,1))
+            # ub = self.Fw[:nw].reshape(nw,1)      # upper bounds
+            # lb = -self.Fw[nw:].reshape(nw,1)     # lower bounds
+            # w  = np.random.uniform(lb, ub, size=(nw,1))
 
             # w = lb + (ub - lb) * np.random.rand(nw, 1)
+            # next_state += self.E @ (w.squeeze())
+            w = sample_disturbance(self.Gw, self.Fw)
             next_state += self.E @ (w.squeeze())
 
         # Prepare the state message

@@ -88,7 +88,7 @@ def deflate_workspace_poly(A: np.ndarray, b: np.ndarray, r: float):
 def assert_has_any_entries(blocks):
     if (not blocks) or all(isinstance(b, list) and not b for b in blocks):
         raise ValueError(
-            "CIS computation failed: check your constraints, discretized model, or disturbances."
+            "CIS computation failed: check your constraints, discretized model, to much bound, or disturbances."
         )
 
 

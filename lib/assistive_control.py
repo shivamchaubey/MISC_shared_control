@@ -383,13 +383,13 @@ if __name__ == "__main__":
         u_hist.append(u_asst)
 
         # visualization
-        plotter.set_point(x0)
+        # plotter.set_point(x0)
         vel = np.array(x_hist)[:, 2:4]
         len_vel = vel.shape[0]
         t = np.arange(0.1, len_vel*0.1+0.001, 0.1)
         # print (t)
         # print (vel)
-        plotter.set_velocity(vel, xlim=0.1*i)
+        # plotter.set_velocity(vel, xlim=0.1*i)
         # time.sleep(0.1)
         plt.pause(0.1)
 

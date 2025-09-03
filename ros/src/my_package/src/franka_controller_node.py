@@ -67,6 +67,7 @@ class SystemSimulationNode:
         # Initialize publisher for the state
         self.state_pub = rospy.Publisher('/state', Float64MultiArray, queue_size=1)
         self.curr_state_pub = rospy.Publisher('/curr_state', Float64MultiArray, queue_size=1)
+        self.pred_model_state_pub = rospy.Publisher('/pred_model_state', Float64MultiArray, queue_size=1)
         self.pub_cmd_arr   = rospy.Publisher("/panda_cmd",      Float64MultiArray, queue_size=1)
         self.pub_pose      = rospy.Publisher("franka/ee_pose",  PoseStamped,       queue_size=1)
         self.pub_twist     = rospy.Publisher("franka/ee_twist", TwistStamped,      queue_size=1)
@@ -127,6 +128,12 @@ class SystemSimulationNode:
         ee_pose = cs.pose.end_effector_pose
         ee_tw   = cs.velocity.end_effector_twist
         print ("ee_pose", ee_pose)
+
+        # model prediction
+        pred_model_state_msg = Float64MultiArray()
+        pred_model_state_msg.data = next_state.tolist()
+        # Publish the state message
+        self.pred_model_state_pub.publish(pred_model_state_msg)
 
         # update the state, this will have the error term as the next state from the model and franka would match
         next_state[0] = float(ee_pose.translation[0])
