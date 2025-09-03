@@ -9,7 +9,8 @@
 *include
 *build
 !lib/extra/map/*.npy
-*.catkin_tool
+ros/.catkin_tools
 *.pyc
 lib/__pycache__/*
-__pycache__
+ros/logs
+*__pycache__
